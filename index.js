@@ -5,7 +5,6 @@ var mkdirp = require('mkdirp')
 var zlib   = require('zlib')
 var tar    = require('tar')
 var crypto = require('crypto')
-var through = require('through')
 
 function toPkg(pkg) {
   if('string' === typeof pkg) {
