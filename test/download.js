@@ -8,8 +8,12 @@ var rimraf = require('rimraf')
 var assert = require('assert')
 var test = require('tape')
 
-var testCache = path.join(os.tmpdir(), 'test-cache' + Date.now())
-var testTarget = path.join(os.tmpdir(), 'test-target' + Date.now())
+var tmpdir = os.tmpdir 
+    ? os.tmpdir() 
+    : process.env.TMPDIR || '/tmp'
+
+var testCache = path.join(tmpdir, 'test-cache' + Date.now())
+var testTarget = path.join(tmpdir, 'test-target' + Date.now())
 
 var opts = {cache: testCache, target: testTarget}
 
