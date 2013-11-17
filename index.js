@@ -102,6 +102,8 @@ function unpack (pkg, opts, cb) {
       stream.on('data', function (b) {
           hash.update(b)
       })
+      //TODO: if the hash is wrong, and we are online,
+      //stop now, download again, and replace the cached tarball.
       .on('end', next)
 
       stream.pipe(zlib.createGunzip())
