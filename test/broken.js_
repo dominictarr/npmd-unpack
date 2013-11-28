@@ -1,0 +1,16 @@
+
+
+var unpack = require('../').unpack
+var path   = require('path')
+var tape   = require('tape')
+tape('unpacking a broken file must error', function (t) {
+  t.plan(1)
+  unpack(
+    {name: 'request', version: '2.27.0'},
+    {cache: path.join(__dirname, 'fixtures')},
+    function (err, hash) {
+      t.ok(err)
+      t.end()
+    })
+
+})
