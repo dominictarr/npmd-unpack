@@ -19,14 +19,14 @@ function toPkg(pkg) {
 
 var registry = 'http://isaacs.iriscouch.com/registry'
 
-function getUrl (pkg, opts) {
+function getUrl (pkg, config) {
   pkg = toPkg(pkg)
 
   if(/^https?/.test(pkg.from))
     return pkg.from
 
   return (
-    (opts.registry||registry) +"/" 
+    (config.registry||registry) +"/" 
   + pkg.name + "/" 
   + pkg.name + "-" 
   + pkg.version + ".tgz"
@@ -39,14 +39,14 @@ function getUrl (pkg, opts) {
 // But to pull down new deps...
 // Also... hashes would allow peer to peer module hosting, and multiple repos...
 
-function getCache (pkg, opts) {
+function getCache (pkg, config) {
   pkg = toPkg(pkg)
 
-  if(opts && opts.cacheHash)
-    return path.join(opts.cache, pkg.shasum, 'package.tgz')
+  if(config && config.cacheHash)
+    return path.join(config.cache, pkg.shasum, 'package.tgz')
 
   return path.join(
-    opts.cache || path.join(process.env.HOME, '.npm'),
+    config.cache || path.join(process.env.HOME, '.npm'),
     pkg.name, pkg.version, 'package.tgz'
   )
 }
@@ -80,12 +80,12 @@ function get (url, cb) {
   }
 }
 
-function getDownload(pkg, opts, cb) {
+function getDownload(pkg, config, cb) {
   pkg = toPkg(pkg)
-  var cache = getCache(pkg, opts)
+  var cache = getCache(pkg, config)
   mkdirp(path.dirname(cache), function () {
-    console.log('URL', getUrl(pkg, opts))
-    get(getUrl(pkg, opts), function (err, res) {
+    console.log('URL', getUrl(pkg, config))
+    get(getUrl(pkg, config), function (err, res) {
       if(err) return cb(err)
       res.pipe(fs.createWriteStream(cache))
       cb(null, res)
@@ -95,13 +95,13 @@ function getDownload(pkg, opts, cb) {
 
 // stream a tarball - either from cache or registry
 
-function getTarballStream (pkg, opts, cb) {
-  var cache = getCache(pkg, opts)
+function getTarballStream (pkg, config, cb) {
+  var cache = getCache(pkg, config)
   fs.stat(cache, function (err) {
     if(!err)
       cb(null, fs.createReadStream(cache))
     else
-      getDownload(pkg, opts, cb)
+      getDownload(pkg, config, cb)
   })
 }
 
@@ -114,9 +114,9 @@ function getTmp (config) {
   return path.join(config.tmpdir || '/tmp', ''+Date.now() + Math.random())
 }
   
-function unpack (pkg, opts, cb) {
+function unpack (pkg, config, cb) {
   if(!cb)
-    cb = opts, opts = {}
+    cb = config, config = {}
 
   pkg = toPkg(pkg)
 
@@ -126,11 +126,11 @@ function unpack (pkg, opts, cb) {
   var name = pkg.name
   var ver  = pkg.version
 
-  var cache = getCache(pkg, opts)
-  var tmp = opts.target || getTmp(config)
+  var cache = getCache(pkg, config)
+  var tmp = config.target || getTmp(config)
 
   mkdirp(tmp, function (err) {
-    getTarballStream(pkg, opts, function (err, stream) {
+    getTarballStream(pkg, config, function (err, stream) {
       if(err) return cb(err)
 
       var i = 2
