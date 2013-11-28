@@ -63,7 +63,7 @@ function get (url, cb) {
     if(urls.length > 5)
       cb(end = new Error('too many redirects\n'+JSON.stringify(urls)))
 
-    console.log('GET', url)
+    console.error('GET', url)
     ;(/^https/.test(url) ? https : http).get(url, function next (res) {
 
       if(res.statusCode >= 300 && res.statusCode < 400)
@@ -80,14 +80,40 @@ function get (url, cb) {
   }
 }
 
+var currentDownloads = {}
+
 function getDownload(pkg, config, cb) {
   pkg = toPkg(pkg)
   var cache = getCache(pkg, config)
   mkdirp(path.dirname(cache), function () {
-    console.log('URL', getUrl(pkg, config))
-    get(getUrl(pkg, config), function (err, res) {
+    var url = getUrl(pkg, config)
+
+//    var c = currentDownloads[url]
+//    if(c) {
+//      console.log('AWAITING', url)
+//      return c.push(cb)
+//    }
+//    c = currentDownloads[url] = []
+
+    get(url, function (err, res) {
       if(err) return cb(err)
-      res.pipe(fs.createWriteStream(cache))
+      var tmp = path.join(config.cache, 'tmp'+Date.now() + Math.random())
+      res.pipe(fs.createWriteStream(tmp))
+        .on('close', function () {
+          fs.rename(tmp, cache, function (err) {
+            if(err)
+              console.error(err.stack)
+          })
+        })
+
+//        .on('close', function () {
+//          var s = fs.createReadStream(cache)
+//          c.forEach(function (cb) {
+//            cb(null, s)
+//          })
+//          delete currentDownloads[url]
+//        }))
+
       cb(null, res)
     })
   })
@@ -118,6 +144,8 @@ function unpack (pkg, config, cb) {
   if(!cb)
     cb = config, config = {}
 
+  ;(function _unpack () {
+
   pkg = toPkg(pkg)
 
   if(!pkg.version)
@@ -134,59 +162,77 @@ function unpack (pkg, config, cb) {
       if(err) return cb(err)
 
       var i = 2
-      stream.on('error', next)
-
       var hash = crypto.createHash('sha1')
       stream.on('data', function (b) {
           hash.update(b)
       })
-      //TODO: if the hash is wrong, and we are online,
-      //stop now, download again, and replace the cached tarball.
+      .on('error', next)
       .on('end', next)
 
-      stream.pipe(zlib.createGunzip())
+      stream
+      .pipe(zlib.createGunzip())
       .on('error', function (err) {
         err.message = (
             err.message
           + '\n trying to unpack '
           + name + '@' + ver
         )
-        i = -1; cb(err)
+        next(err)
       })
+      .on('error',next)
       .pipe(tar.Extract({path: tmp}))
+      .on('error', function (err) {
+        err.message = err.message + '\nwhile unpacking:' + pkg.name + '@' + pkg.version
+        next(err)
+      })
       .on('end', next)
 
       function next (err) {
+        if(err && i) return i = -1, cb(err)
         if(--i) return
+        if(err)
+          err.message = err.message + '\nattempting to unpack:'+ pkg.name + '@' + pkg.version
 
         //if there was an error, remove the cached file...
-        if(err)
-          return fs.rename(path.dirname(cache), getTmp(config), function (_) {
-            cb(err)
-          })
+//        if(err)
+//          return rimraf(path.dirname(cache), function (_) {
+//            if(_) console.error('TIDY UP ERROR', _.stack)
+//          console.log('ERR', err)
+//              cb(err)
+//          })
 
         var shasum = hash.digest('hex')
 
-        //if the has is wrong, redownload the file, unless we are in offline mode.
-        if(pkg.shasum && !config.offline && shasum !== pkg.shasum) {
-          console.error(shasum+'!=='+pkg.shasum+', redownloading')
-          return rimraf(path.dirname(cache), function (err) {
-            if(err) return cb(err)
-            unpack(pkg, config, cb)
-          })
+        if(pkg.shasum && shasum !== pkg.shasum) {
+          console.log('WARN' ,pkg.shasum+'!=='+shasum)
+          if(!config.offline) {
+            if(tries <= 1) {
+              console.error('redownloading:', pkg.name+'@'+pkg.version+'=='+pkg.shasum)
+              return rimraf(path.dirname(cache), function (err) {
+                if(err || tries > 1) return cb(err)
+                _unpack(pkg, config, cb)
+              })
+            } else {
+              console.error('**************************')
+              console.error('WARNING. We have tried to download')
+              console.error(pkg.name +'@'+pkg.version, 'twice now, but keep getting the wrong hash')
+              console.error('probably, this is because the author did npm publish --force')
+              console.error('but your local data has not synced with that. continuing')
+              console.error('**************************')
+            }
+          }
         }
-          
         cb(err, shasum)
       }
     })
   })
+  })()
 }
 
 exports.unpack = unpack
 exports.toPkg  = toPkg
 exports.getUrl = getUrl
 exports.getCache = getCache
-
 
 if(!module.parent) {
   var config = require('npmd-config')
@@ -203,6 +249,7 @@ if(!module.parent) {
     var version = m.shift()
     if(!(module && version && config.from))
       new Error('needs arguments: module@version or --from URL')
+
     unpack({
       name: module,
       version: version,
@@ -215,5 +262,6 @@ if(!module.parent) {
     if(err) throw err
     console.log(hash)
   }
+
 
 }
