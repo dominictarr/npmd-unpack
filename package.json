@@ -1,6 +1,6 @@
 {
   "name": "npmd-unpack",
-  "description": "",
+  "description": "retrive and unpack npm tarballs",
   "version": "1.0.2",
   "homepage": "https://github.com/dominictarr/npmd-unpack",
   "repository": {
