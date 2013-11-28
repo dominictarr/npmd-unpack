@@ -143,9 +143,9 @@ function getTmp (config) {
 function unpack (pkg, config, cb) {
   if(!cb)
     cb = config, config = {}
-
+  var tries = 0
   ;(function _unpack () {
-
+  tries ++
   pkg = toPkg(pkg)
 
   if(!pkg.version)
