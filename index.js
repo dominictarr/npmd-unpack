@@ -4,6 +4,7 @@ var https  = require('https')
 var fs     = require('fs')
 var path   = require('path')
 var mkdirp = require('mkdirp')
+var rimraf = require('rimraf')
 var zlib   = require('zlib')
 var tar    = require('tar')
 var crypto = require('crypto')
@@ -96,7 +97,6 @@ function getDownload(pkg, opts, cb) {
 
 function getTarballStream (pkg, opts, cb) {
   var cache = getCache(pkg, opts)
-  console.log(cache)
   fs.stat(cache, function (err) {
     if(!err)
       cb(null, fs.createReadStream(cache))
@@ -109,6 +109,10 @@ function getTarballStream (pkg, opts, cb) {
 // recommend unpacking to tmpdir and then moving a following step.
 
 //ALSO, should hash the file as we unpack it, and validate that we get the correct hash.
+
+function getTmp (config) {
+  return path.join(config.tmpdir || '/tmp', ''+Date.now() + Math.random())
+}
   
 function unpack (pkg, opts, cb) {
   if(!cb)
@@ -121,9 +125,9 @@ function unpack (pkg, opts, cb) {
 
   var name = pkg.name
   var ver  = pkg.version
-  //SHOULD COME FROM CONFIG
+
   var cache = getCache(pkg, opts)
-  var tmp = opts.target || path.join(config.tmpdir || '/tmp', ''+Date.now() + Math.random())
+  var tmp = opts.target || getTmp(config)
 
   mkdirp(tmp, function (err) {
     getTarballStream(pkg, opts, function (err, stream) {
@@ -154,8 +158,25 @@ function unpack (pkg, opts, cb) {
 
       function next (err) {
         if(--i) return
-        
-        cb(err, hash.digest('hex'))
+
+        //if there was an error, remove the cached file...
+        if(err)
+          return fs.rename(path.dirname(cache), getTmp(config), function (_) {
+            cb(err)
+          })
+
+        var shasum = hash.digest('hex')
+
+        //if the has is wrong, redownload the file, unless we are in offline mode.
+        if(pkg.shasum && !config.offline && shasum !== pkg.shasum) {
+          console.error(shasum+'!=='+pkg.shasum+', redownloading')
+          return rimraf(path.dirname(cache), function (err) {
+            if(err) return cb(err)
+            unpack(pkg, config, cb)
+          })
+        }
+          
+        cb(err, shasum)
       }
     })
   })
