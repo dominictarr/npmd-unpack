@@ -1,4 +1,6 @@
+#! /usr/bin/env node
 var http   = require('http')
+var https  = require('https')
 var fs     = require('fs')
 var path   = require('path')
 var mkdirp = require('mkdirp')
@@ -14,9 +16,20 @@ function toPkg(pkg) {
   return pkg
 }
 
+var registry = 'http://isaacs.iriscouch.com/registry'
+
 function getUrl (pkg, opts) {
   pkg = toPkg(pkg)
-  return registry +"/" + pkg.name + "/" + pkg.name + "-" + pkg.version + ".tgz"
+
+  if(/^https?/.test(pkg.from))
+    return pkg.from
+
+  return (
+    (opts.registry||registry) +"/" 
+  + pkg.name + "/" 
+  + pkg.name + "-" 
+  + pkg.version + ".tgz"
+  )
 }
 
 // Would be better to store the tarball as it's hash,
@@ -37,21 +50,42 @@ function getCache (pkg, opts) {
   )
 }
 
-var registry = 'http://isaacs.iriscouch.com/registry'
-
-function getUrl (pkg, opts) {
-  pkg = toPkg(pkg)
-  return (opts.registry || registry) +"/" + pkg.name + "/" + pkg.name + "-" + pkg.version + ".tgz"
-}
 
 // pull a package from the registry
+
+function get (url, cb) {
+  var urls = [], end
+  _get(url, cb)
+  function _get (url) {
+    urls.push(url)
+    if(end) return
+    if(urls.length > 5)
+      cb(end = new Error('too many redirects\n'+JSON.stringify(urls)))
+
+    console.log('GET', url)
+    ;(/^https/.test(url) ? https : http).get(url, function next (res) {
+
+      if(res.statusCode >= 300 && res.statusCode < 400)
+        _get(res.headers.location)
+      else {
+        end = true,
+        cb(null, res)
+      }
+    })
+    .on('error', function (err) {
+      if(!end)
+        cb(end = err)
+    })
+  }
+}
 
 function getDownload(pkg, opts, cb) {
   pkg = toPkg(pkg)
   var cache = getCache(pkg, opts)
   mkdirp(path.dirname(cache), function () {
     console.log('URL', getUrl(pkg, opts))
-    http.get(getUrl(pkg, opts), function (res) {      
+    get(getUrl(pkg, opts), function (err, res) {
+      if(err) return cb(err)
       res.pipe(fs.createWriteStream(cache))
       cb(null, res)
     })
@@ -89,7 +123,7 @@ function unpack (pkg, opts, cb) {
   var ver  = pkg.version
   //SHOULD COME FROM CONFIG
   var cache = getCache(pkg, opts)
-  var tmp = opts.target || path.join(tmpdir, ''+Date.now() + Math.random())
+  var tmp = opts.target || path.join(config.tmpdir || '/tmp', ''+Date.now() + Math.random())
 
   mkdirp(tmp, function (err) {
     getTarballStream(pkg, opts, function (err, stream) {
@@ -132,3 +166,33 @@ exports.toPkg  = toPkg
 exports.getUrl = getUrl
 exports.getCache = getCache
 
+
+if(!module.parent) {
+  var config = require('npmd-config')
+  var data = ''
+  if(!process.stdin.isTTY)
+    process.stdin
+      .on('data', function (d) { data += d })
+      .on('end', function () {
+        unpack(JSON.parse(data), config, next)
+      })
+  else {
+    var m = (config._[0] || '').split('@')
+    var module = m.shift()
+    var version = m.shift()
+    if(!(module && version && config.from))
+      new Error('needs arguments: module@version or --from URL')
+    unpack({
+      name: module,
+      version: version,
+      from: config.from,
+      shasum: config.shasum
+    }, config, next)
+  }
+
+  function next(err, hash) {
+    if(err) throw err
+    console.log(hash)
+  }
+
+}
