@@ -8,6 +8,8 @@ var rimraf = require('rimraf')
 var zlib   = require('zlib')
 var tar    = require('tar')
 var crypto = require('crypto')
+var CAS    = require('content-addressable-store')
+var mkdirMv = require('mkdir-and-mv-stream')
 
 function toPkg(pkg) {
   if('string' === typeof pkg) {
@@ -17,7 +19,7 @@ function toPkg(pkg) {
   return pkg
 }
 
-var registry = 'http://isaacs.iriscouch.com/registry'
+var registry = 'https://registry.npmjs.org' //'http://isaacs.iriscouch.com/registry'
 
 function getUrl (pkg, config) {
   pkg = toPkg(pkg)
@@ -27,7 +29,7 @@ function getUrl (pkg, config) {
 
   return (
     (config.registry||registry) +"/" 
-  + pkg.name + "/" 
+  + pkg.name + "/-/" 
   + pkg.name + "-" 
   + pkg.version + ".tgz"
   )
@@ -84,51 +86,50 @@ var currentDownloads = {}
 
 function getDownload(pkg, config, cb) {
   pkg = toPkg(pkg)
+  var url = getUrl(pkg, config)
   var cache = getCache(pkg, config)
-  mkdirp(path.dirname(cache), function () {
-    var url = getUrl(pkg, config)
 
-//    var c = currentDownloads[url]
-//    if(c) {
-//      console.log('AWAITING', url)
-//      return c.push(cb)
-//    }
-//    c = currentDownloads[url] = []
-
-    get(url, function (err, res) {
-      if(err) return cb(err)
-      var tmp = path.join(config.cache, 'tmp'+Date.now() + Math.random())
-      res.pipe(fs.createWriteStream(tmp))
-        .on('close', function () {
-          fs.rename(tmp, cache, function (err) {
-            if(err)
-              console.error(err.stack)
-          })
-        })
-
-//        .on('close', function () {
-//          var s = fs.createReadStream(cache)
-//          c.forEach(function (cb) {
-//            cb(null, s)
-//          })
-//          delete currentDownloads[url]
-//        }))
-
-      cb(null, res)
-    })
+  get(url, function (err, res) {
+    if(err) return cb(err)
+    if(config.casDb) {
+      console.error('saving', pkg.name + '@' + pkg.version, 'to CAS')
+      //okay, this needs to remove the parent directory like git-resolve does
+      //or rather, that all needs to be tidied up,
+      //so that all the ways of adding to the cache are consistent.
+      //if there is just an npmd-cache that can handle the new style,
+      //and fallback too.
+      res.pipe(config.casDb.addStream())
+    } else {
+      res.pipe(mkdirMv(cache))
+    }
+    cb(null, res)
   })
 }
 
 // stream a tarball - either from cache or registry
 
 function getTarballStream (pkg, config, cb) {
-  var cache = getCache(pkg, config)
-  fs.stat(cache, function (err) {
-    if(!err)
-      cb(null, fs.createReadStream(cache))
-    else
-      getDownload(pkg, config, cb)
-  })
+  if(config.casDb && pkg.shasum) {
+    var db = config.casDb
+    db.has(pkg.shasum, function (err, stat) {
+      if(!err)
+        cb(null, db.getStream(pkg.shasum))
+      else //fallback to the old way...
+        tryCache()
+    })
+  }
+  else
+    tryCache()
+
+  function tryCache () {
+    var cache = getCache(pkg, config)
+    fs.stat(cache, function (err) {
+      if(!err)
+        cb(null, fs.createReadStream(cache))
+      else
+        getDownload(pkg, config, cb)
+    })
+  }
 }
 
 // unpack a tarball to some target directory.
@@ -143,9 +144,10 @@ function getTmp (config) {
 function unpack (pkg, config, cb) {
   if(!cb)
     cb = config, config = {}
-  var tries = 0
-  ;(function _unpack () {
-  tries ++
+
+  if((!config.casDb) && config.dbPath)
+    config.casDb = CAS(path.join(config.dbPath, 'tarballs'))
+
   pkg = toPkg(pkg)
 
   if(!pkg.version)
@@ -164,7 +166,7 @@ function unpack (pkg, config, cb) {
       var i = 2
       var hash = crypto.createHash('sha1')
       stream.on('data', function (b) {
-          hash.update(b)
+        hash.update(b)
       })
       .on('error', next)
       .on('end', next)
@@ -193,40 +195,14 @@ function unpack (pkg, config, cb) {
         if(err)
           err.message = err.message + '\nattempting to unpack:'+ pkg.name + '@' + pkg.version
 
-        //if there was an error, remove the cached file...
-//        if(err)
-//          return rimraf(path.dirname(cache), function (_) {
-//            if(_) console.error('TIDY UP ERROR', _.stack)
-//          console.log('ERR', err)
-//              cb(err)
-//          })
-
         var shasum = hash.digest('hex')
 
-        if(pkg.shasum && shasum !== pkg.shasum) {
+        if(pkg.shasum && shasum !== pkg.shasum)
           console.log('WARN' ,pkg.shasum+'!=='+shasum)
-          if(!config.offline) {
-            if(tries <= 1) {
-              console.error('redownloading:', pkg.name+'@'+pkg.version+'=='+pkg.shasum)
-              return rimraf(path.dirname(cache), function (err) {
-                if(err || tries > 1) return cb(err)
-                _unpack(pkg, config, cb)
-              })
-            } else {
-              console.error('**************************')
-              console.error('WARNING. We have tried to download')
-              console.error(pkg.name +'@'+pkg.version, 'twice now, but keep getting the wrong hash')
-              console.error('probably, this is because the author did npm publish --force')
-              console.error('but your local data has not synced with that. continuing')
-              console.error('**************************')
-            }
-          }
-        }
         cb(err, shasum)
       }
     })
   })
-  })()
 }
 
 exports.unpack = unpack
@@ -252,7 +228,7 @@ if(!module.parent) {
 
     unpack({
       name: module,
-      version: version,
+      version: version  || '0.0.0',
       from: config.from,
       shasum: config.shasum
     }, config, next)
@@ -262,6 +238,5 @@ if(!module.parent) {
     if(err) throw err
     console.log(hash)
   }
-
 
 }
